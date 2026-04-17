@@ -1,0 +1,6 @@
+api_id = 12345678
+api_hash = "your_api_hash_here"
+
+# Global defaults - can be overridden per channel
+forward_delay_ms = 1500
+batch_size = 100

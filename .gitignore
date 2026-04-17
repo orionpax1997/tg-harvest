@@ -1,0 +1,7 @@
+/target
+/Cargo.lock
+*.session
+*.db
+config.toml
+channels/
+skills-lock.json

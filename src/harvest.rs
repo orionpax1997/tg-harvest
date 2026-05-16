@@ -113,7 +113,6 @@ pub async fn harvest_channel(
             break;
         }
 
-        offset += batch_size as i32;
         tracing::debug!("Fetching batch with offset_id={}", offset);
 
         let source_ref = source_peer.to_ref().await.context("Failed to get peer ref")?;
@@ -287,6 +286,8 @@ pub async fn harvest_channel(
             total_scanned,
             total_forwarded
         );
+
+        offset += batch_size as i32;
     }
 
     Ok(HarvestStats {

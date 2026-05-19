@@ -28,7 +28,7 @@ pub async fn forward_message(
     target: &str,
 ) -> anyhow::Result<()> {
     let target_peer = resolve_peer(client, target).await?;
-    tracing::debug!("Resolving target peer: {} -> {:?}", target, target_peer);
+    tracing::info!("Resolving target peer: {}", target);
 
     let target_ref = target_peer
         .to_ref()

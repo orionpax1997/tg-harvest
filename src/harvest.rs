@@ -292,7 +292,7 @@ pub async fn harvest_channel(
             let db = db_conn.lock().await;
             db::save_cursor(&db, &source, &target, &cursor).context("Failed to save cursor")?;
         }
-        tracing::debug!(
+        tracing::info!(
             "Batch [{}, {}): raw={}, filtered={}, scanned={}, forwarded={}",
             offset - batch_size as i32,
             offset,

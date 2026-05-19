@@ -152,7 +152,7 @@ limit = 0
 mode = "{}"
 
 [filter.reactions]
-specific = ["👍", "❤️"]
+specific = ["👍", "❤"]
 min_specific_total = {}
 
 [filter.comments]
@@ -193,7 +193,7 @@ limit = 0
 mode = "{}"
 
 [filter.reactions]
-specific = ["👍", "❤️"]
+specific = ["👍", "❤"]
 min_specific_total = {}
 
 [filter.comments]

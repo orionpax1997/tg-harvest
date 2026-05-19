@@ -80,7 +80,7 @@ limit = 0  # 0 = unlimited
 mode = "any"  # any = any condition passes, all = all conditions must pass
 
 [filter.reactions]
-specific = ["👍", "❤️"]  # specific emoji to count (empty = count all)
+specific = ["👍", "❤"]  # specific emoji to count (empty = count all)
 min_specific_total = 5   # minimum total reactions
 
 [filter.comments]

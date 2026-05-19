@@ -32,7 +32,7 @@ limit = 0  # 0 = 不限制
 mode = "any"  # any | all
 
 [filter.reactions]
-specific = ["👍", "❤️"]  # 指定 emoji，为空则统计所有
+specific = ["👍", "❤"]  # 指定 emoji，为空则统计所有
 min_specific_total = 5
 
 [filter.comments]

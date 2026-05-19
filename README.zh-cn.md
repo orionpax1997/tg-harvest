@@ -80,7 +80,7 @@ limit = 0  # 0 = 不限制
 mode = "any"  # any = 任一条件满足, all = 所有条件都满足
 
 [filter.reactions]
-specific = ["👍", "❤️"]  # 指定 emoji，为空则统计所有
+specific = ["👍", "❤"]  # 指定 emoji，为空则统计所有
 min_specific_total = 5   # 最低 reaction 总数
 
 [filter.comments]

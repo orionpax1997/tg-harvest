@@ -189,11 +189,20 @@ pub async fn harvest_channel(
 
 
                 let first_accepted = filter.accept(&group[0]);
+                tracing::debug!(
+                    "Album check: grouped_id={}, first_msg_id={}, last_msg_id={}, first_accepted={}, reactions={:?}, comments={:?}",
+                    gid, group[0].id(), cursor.last_msg_id, first_accepted,
+                    group[0].reaction_count(), group[0].reply_count()
+                );
 
                 let first_msg_id = group[0].id();
+                tracing::debug!(
+                    "Album check: grouped_id={}, first_msg_id={}, last_msg_id={}, first_accepted={}",
+                    gid, first_msg_id, cursor.last_msg_id, first_accepted
+                );
                 if first_msg_id as i64 <= cursor.last_msg_id {
                     total_skipped += group.len() as i64;
-                    tracing::trace!("Skipped album with grouped_id {} (first msg {} already forwarded)", gid, first_msg_id);
+                    tracing::debug!("Skipped album with grouped_id {} (first msg {} already forwarded)", gid, first_msg_id);
                     total_scanned += group.len() as i64;
                     processed_count += group.len();
                     i = group_end;
@@ -202,7 +211,7 @@ pub async fn harvest_channel(
 
                 if !first_accepted {
                     total_skipped += group.len() as i64;
-                    tracing::trace!("Skipped album with grouped_id {} (first msg rejected)", gid);
+                    tracing::debug!("Skipped album with grouped_id {} (first msg rejected)", gid);
                 } else {
                     match forward_album(client, &group, &target).await {
                         Ok(_) => {
@@ -233,12 +242,18 @@ pub async fn harvest_channel(
                 total_scanned += 1;
                 processed_count += 1;
 
+                let accepted = filter.accept(msg);
+                tracing::debug!(
+                    "Msg check: msg_id={}, last_msg_id={}, accepted={}, reactions={:?}, comments={:?}",
+                    msg.id(), cursor.last_msg_id, accepted,
+                    msg.reaction_count(), msg.reply_count()
+                );
                 if msg.id() as i64 <= cursor.last_msg_id {
                     total_skipped += 1;
-                    tracing::trace!("Skipped msg_id {} (already forwarded)", msg.id());
+                    tracing::debug!("Skipped msg_id {} (already forwarded)", msg.id());
                     i += 1;
                     continue;
-                } else if filter.accept(msg) {
+                } else if accepted {
                     match send_with_retry(client, msg, &target, 5).await {
                         Ok(true) => {
                             total_forwarded += 1;

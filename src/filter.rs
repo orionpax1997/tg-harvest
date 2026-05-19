@@ -18,7 +18,7 @@ impl ChannelFilter {
         if let Some(reactions_config) = &config.reactions {
             if !reactions_config.specific.is_empty() || reactions_config.min_specific_total > 0 {
                 filters.push(Box::new(ReactionFilter {
-                    specific: reactions_config.specific.clone(),
+                    specific: reactions_config.specific.iter().map(|s| normalize_emoji(s)).collect(),
                     min_specific_total: reactions_config.min_specific_total,
                 }));
             }
@@ -68,10 +68,14 @@ impl MessageFilter for ReactionFilter {
 
         let reactions = match &msg.raw {
             tl::enums::Message::Message(m) => &m.reactions,
-            _ => return false,
+            _ => {
+                tracing::debug!("ReactionFilter: not a regular message, rejecting");
+                return false;
+            }
         };
 
         let Some(tl::enums::MessageReactions::Reactions(r)) = reactions else {
+            tracing::debug!("ReactionFilter: no reactions data, rejecting");
             return false;
         };
 
@@ -79,17 +83,23 @@ impl MessageFilter for ReactionFilter {
 
         for reaction_count in r.results.iter() {
             let tl::enums::ReactionCount::Count(rc) = reaction_count;
+            let emoji = reaction_emoji(rc);
+            tracing::debug!("ReactionFilter: emoji={}, count={}", emoji, rc.count);
             if self.specific.is_empty() {
                 total_specific += rc.count as i64;
             } else {
-                let emoji = reaction_emoji(rc);
                 if self.specific.contains(&emoji) {
                     total_specific += rc.count as i64;
                 }
             }
         }
 
-        total_specific >= self.min_specific_total as i64
+        let result = total_specific >= self.min_specific_total as i64;
+        tracing::debug!(
+            "ReactionFilter: total={} min={} specific={:?} result={}",
+            total_specific, self.min_specific_total, self.specific, result
+        );
+        result
     }
 }
 
@@ -112,13 +122,18 @@ impl MessageFilter for CommentFilter {
     }
 }
 
+fn normalize_emoji(s: &str) -> String {
+    s.chars().filter(|&c| c != '\u{fe0f}').collect()
+}
+
 fn reaction_emoji(r: &tl::types::ReactionCount) -> String {
-    match &r.reaction {
+    let raw = match &r.reaction {
         tl::enums::Reaction::Emoji(e) => e.emoticon.clone(),
         tl::enums::Reaction::CustomEmoji(e) => format!("<custom:{}>", e.document_id),
         tl::enums::Reaction::Empty => String::new(),
         tl::enums::Reaction::Paid => String::new(),
-    }
+    };
+    normalize_emoji(&raw)
 }
 
 #[allow(dead_code)]

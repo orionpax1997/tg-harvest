@@ -1,34 +1,14 @@
-use grammers_client::{Client, message::Message, peer::Peer};
-use grammers_session::types::PeerRef;
+use grammers_client::{Client, message::Message};
 use crate::config::{ChannelConfig, GlobalConfig};
 use crate::db;
 use crate::filter::{ChannelFilter, MessageFilter};
-use crate::forward::{send_with_retry, forward_album};
+use crate::forward::{send_with_retry, forward_album, resolve_peer, PeerCache, PeerNames};
 use anyhow::Context;
 use chrono::Utc;
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-
-async fn resolve_peer(client: &Client, identifier: &str) -> anyhow::Result<Peer> {
-    if let Ok(id) = identifier.parse::<i64>() {
-        let peer_ref = PeerRef {
-            id: grammers_session::types::PeerId::channel(id),
-            auth: grammers_session::types::PeerAuth::default(),
-        };
-        client
-            .resolve_peer(peer_ref)
-            .await
-            .context(format!("Failed to resolve peer by ID: {}", identifier))
-    } else {
-        client
-            .resolve_username(identifier)
-            .await
-            .context(format!("Failed to resolve username: {}", identifier))?
-            .ok_or_else(|| anyhow::anyhow!("Peer '{}' not found", identifier))
-    }
-}
 
 pub struct HarvestStats {
     pub total_scanned: i64,
@@ -41,6 +21,8 @@ pub async fn harvest_channel(
     db_conn: &Arc<Mutex<Connection>>,
     channel_config: &ChannelConfig,
     global_config: &GlobalConfig,
+    peer_cache: &PeerCache,
+    peer_names: &PeerNames,
 ) -> anyhow::Result<HarvestStats> {
     let source = channel_config.source.clone();
     let target = channel_config.target.clone();
@@ -48,20 +30,23 @@ pub async fn harvest_channel(
     let batch_size = global_config.batch_size;
     let forward_delay_ms = global_config.forward_delay_ms;
 
+    let source_label = lookup_name(peer_names, &source, &source);
+    let target_label = lookup_name(peer_names, &target, &target);
+
     // Load cursor outside of network calls
     let mut cursor = {
         let db = db_conn.lock().await;
         db::load_cursor(&db, &source, &target).context("Failed to load cursor")?
     };
-    
+
     tracing::info!(
         "Harvest: {} -> {} (from msg {})",
-        source,
-        target,
+        source_label,
+        target_label,
         cursor.last_msg_id
     );
 
-    let source_peer = resolve_peer(client, &source).await?;
+    let source_peer = resolve_peer(client, &source, peer_cache).await?;
 
     // Get latest message ID first
     let source_ref = source_peer.to_ref().await.context("Failed to get peer ref")?;
@@ -213,7 +198,13 @@ pub async fn harvest_channel(
                     total_skipped += group.len() as i64;
                     tracing::debug!("Skipped album with grouped_id {} (first msg rejected)", gid);
                 } else {
-                    match forward_album(client, &group, &target).await {
+                    tracing::info!(
+                        "Forwarding album of {} msgs (msg {}, total forwarded so far: {})",
+                        group.len(),
+                        group[0].id(),
+                        total_forwarded
+                    );
+                    match forward_album(client, &group, &target, peer_cache).await {
                         Ok(_) => {
                             total_forwarded += group.len() as i64;
                             let last_msg = &group[group.len() - 1];
@@ -254,7 +245,12 @@ pub async fn harvest_channel(
                     i += 1;
                     continue;
                 } else if accepted {
-                    match send_with_retry(client, msg, &target, 5).await {
+                    tracing::info!(
+                        "Forwarding msg {} (total forwarded so far: {})",
+                        msg.id(),
+                        total_forwarded
+                    );
+                    match send_with_retry(client, msg, &target, 5, peer_cache).await {
                         Ok(true) => {
                             total_forwarded += 1;
                             cursor.last_msg_id = msg.id() as i64;
@@ -310,4 +306,15 @@ pub async fn harvest_channel(
         total_forwarded,
         total_skipped,
     })
+}
+
+fn lookup_name(names: &PeerNames, identifier: &str, fallback: &str) -> String {
+    if let Ok(id) = identifier.parse::<i64>() {
+        names
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| fallback.to_string())
+    } else {
+        fallback.to_string()
+    }
 }

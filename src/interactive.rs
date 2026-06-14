@@ -221,11 +221,17 @@ pub fn delete_channel_config(source: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn get_channel_display_name(client: &Client, identifier: &str) -> String {
-    use grammers_client::peer::Peer;
-    use grammers_session::types::PeerRef;
-    
+pub async fn get_channel_display_name(
+    client: &Client,
+    identifier: &str,
+    name_cache: &crate::forward::PeerNames,
+) -> String {
     if let Ok(id) = identifier.parse::<i64>() {
+        if let Some(name) = name_cache.get(&id) {
+            return name.clone();
+        }
+        use grammers_client::peer::Peer;
+        use grammers_session::types::PeerRef;
         let peer_ref = PeerRef {
             id: grammers_session::types::PeerId::channel(id),
             auth: grammers_session::types::PeerAuth::default(),
@@ -237,15 +243,14 @@ pub async fn get_channel_display_name(client: &Client, identifier: &str) -> Stri
                 Peer::User(_) => {}
             }
         }
-    } else {
-        if let Ok(Some(peer)) = client.resolve_username(identifier).await {
-            match peer {
-                Peer::Channel(ch) => return ch.title().to_string(),
-                Peer::Group(g) => return g.title().unwrap_or(identifier).to_string(),
-                Peer::User(_) => {}
-            }
+    } else if let Ok(Some(peer)) = client.resolve_username(identifier).await {
+        use grammers_client::peer::Peer;
+        match peer {
+            Peer::Channel(ch) => return ch.title().to_string(),
+            Peer::Group(g) => return g.title().unwrap_or(identifier).to_string(),
+            Peer::User(_) => {}
         }
     }
-    
+
     identifier.to_string()
 }

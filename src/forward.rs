@@ -1,13 +1,45 @@
 use grammers_client::{Client, message::Message, peer::Peer};
 use grammers_session::types::PeerRef;
 use anyhow::Context;
+use std::collections::HashMap;
 use std::time::Duration;
 
-async fn resolve_peer(client: &Client, identifier: &str) -> anyhow::Result<Peer> {
+pub type PeerCache = HashMap<i64, PeerRef>;
+pub type PeerNames = HashMap<i64, String>;
+
+pub async fn build_peer_caches(client: &Client) -> (PeerCache, PeerNames) {
+    let mut refs = PeerCache::new();
+    let mut names = PeerNames::new();
+    let mut dialogs = client.iter_dialogs();
+    while let Some(dialog) = dialogs.next().await.ok().flatten() {
+        let bare_id = match dialog.peer() {
+            Peer::Channel(c) => Some(c.id().bare_id()),
+            Peer::Group(g) => Some(g.id().bare_id()),
+            Peer::User(_) => None,
+        };
+        if let Some(id) = bare_id {
+            refs.insert(id, dialog.peer_ref());
+            let name = match dialog.peer() {
+                Peer::Channel(ch) => ch.title().to_string(),
+                Peer::Group(g) => g.title().unwrap_or_default().to_string(),
+                Peer::User(_) => String::new(),
+            };
+            if !name.is_empty() {
+                names.insert(id, name);
+            }
+        }
+    }
+    (refs, names)
+}
+
+pub async fn resolve_peer(client: &Client, identifier: &str, cache: &PeerCache) -> anyhow::Result<Peer> {
     if let Ok(id) = identifier.parse::<i64>() {
-        let peer_ref = PeerRef {
-            id: grammers_session::types::PeerId::channel(id),
-            auth: grammers_session::types::PeerAuth::default(),
+        let peer_ref = match cache.get(&id) {
+            Some(r) => *r,
+            None => PeerRef {
+                id: grammers_session::types::PeerId::channel(id),
+                auth: grammers_session::types::PeerAuth::default(),
+            },
         };
         client
             .resolve_peer(peer_ref)
@@ -26,17 +58,17 @@ pub async fn forward_message(
     client: &Client,
     msg: &Message,
     target: &str,
+    cache: &PeerCache,
 ) -> anyhow::Result<()> {
-    let target_peer = resolve_peer(client, target).await?;
-    tracing::info!("Resolving target peer: {}", target);
+    let target_peer = resolve_peer(client, target, cache).await?;
 
     let target_ref = target_peer
         .to_ref()
         .await
         .context("Failed to get target peer reference")?;
-    
+
     tracing::debug!("Forwarding message {} to target: {}", msg.id(), target);
-    
+
     msg.forward_to(target_ref)
         .await
         .map_err(|e| {
@@ -55,12 +87,13 @@ pub async fn forward_album(
     client: &Client,
     messages: &[Message],
     target: &str,
+    cache: &PeerCache,
 ) -> anyhow::Result<()> {
     if messages.is_empty() {
         return Ok(());
     }
 
-    let target_peer = resolve_peer(client, target).await?;
+    let target_peer = resolve_peer(client, target, cache).await?;
     tracing::debug!(
         "Forwarding album with {} messages to target: {}",
         messages.len(),
@@ -103,19 +136,20 @@ pub async fn send_with_retry(
     msg: &Message,
     target: &str,
     max_retries: u32,
+    cache: &PeerCache,
 ) -> anyhow::Result<bool> {
     let mut attempt = 0;
     let mut base_delay = 1.0f64;
 
     loop {
-        match forward_message(client, msg, target).await {
+        match forward_message(client, msg, target, cache).await {
             Ok(_) => return Ok(true),
             Err(e) => {
                 if e.to_string().contains("目标频道缺少管理员权限") {
                     tracing::error!("任务终止: {}", e);
                     return Err(e);
                 }
-                
+
                 attempt += 1;
                 if attempt > max_retries {
                     tracing::warn!(
@@ -139,7 +173,7 @@ pub async fn send_with_retry(
                 base_delay *= 2.0;
                 let jitter = (rand_id() % 1000) as f64 / 1000.0;
                 let delay = Duration::from_millis(((base_delay + jitter) * 1000.0) as u64);
-                
+
                 tracing::warn!(
                     "Retry {}/{}: {} (retry in {:.1}s)",
                     attempt,
@@ -147,7 +181,7 @@ pub async fn send_with_retry(
                     e,
                     delay.as_secs_f64()
                 );
-                
+
                 tokio::time::sleep(delay).await;
             }
         }

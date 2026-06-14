@@ -16,6 +16,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use anyhow::Context;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use crate::forward::build_peer_caches;
 
 const MAX_CONCURRENT_TASKS: usize = 3;
 
@@ -56,6 +57,15 @@ async fn main() -> anyhow::Result<()> {
     let db_path = PathBuf::from("harvest.db");
     let db_conn = Arc::new(Mutex::new(db::init_db(&db_path).context("Failed to initialize database")?));
     tracing::info!("DB ready");
+
+    let (peer_cache, peer_names) = build_peer_caches(&client).await;
+    let peer_cache = Arc::new(peer_cache);
+    let peer_names = Arc::new(peer_names);
+    tracing::info!(
+        "Peer cache built ({} refs, {} names)",
+        peer_cache.len(),
+        peer_names.len()
+    );
 
     loop {
         let existing_configs = list_existing_configs()?;
@@ -118,8 +128,8 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 "无过滤".to_string()
             };
-            let source_name = get_channel_display_name(&client, &cfg.source).await;
-            let target_name = get_channel_display_name(&client, &cfg.target).await;
+            let source_name = get_channel_display_name(&client, &cfg.source, &peer_names).await;
+            let target_name = get_channel_display_name(&client, &cfg.target, &peer_names).await;
             let item = format!("{} -> {} (限制: {}, 过滤: {})", source_name, target_name, limit_str, filter_desc);
             task_items.push(item.clone());
         }
@@ -159,12 +169,17 @@ async fn main() -> anyhow::Result<()> {
                 let cfg = cfg.clone();
                 let global_config = global_config.clone();
                 let permit = Arc::clone(&semaphore);
-                
+                let peer_cache = Arc::clone(&peer_cache);
+                let peer_names = Arc::clone(&peer_names);
+
+                let source_label = get_channel_display_name(&client, &cfg.source, &peer_names).await;
+                let target_label = get_channel_display_name(&client, &cfg.target, &peer_names).await;
+
                 join_set.spawn(async move {
                     let _permit = permit.acquire().await.unwrap();
-                    tracing::info!("Task: {} -> {}", cfg.source, cfg.target);
-                    
-                    let result = harvest::harvest_channel(&client, &db_conn, &cfg, &global_config).await;
+                    tracing::info!("Task: {} -> {}", source_label, target_label);
+
+                    let result = harvest::harvest_channel(&client, &db_conn, &cfg, &global_config, &peer_cache, &peer_names).await;
                     (cfg.source.clone(), result)
                 });
             }
@@ -256,8 +271,11 @@ async fn main() -> anyhow::Result<()> {
             "返回上级菜单",
         ];
 
+        let source_display = get_channel_display_name(&client, &channel_config.source, &peer_names).await;
+        let target_display = get_channel_display_name(&client, &channel_config.target, &peer_names).await;
+
         let action = dialoguer::Select::new()
-            .with_prompt(format!("任务: {} -> {}", channel_config.source, channel_config.target))
+            .with_prompt(format!("任务: {} -> {}", source_display, target_display))
             .items(&task_actions)
             .default(0)
             .interact()?;
@@ -267,8 +285,8 @@ async fn main() -> anyhow::Result<()> {
                 // 执行任务
                 tracing::info!(
                     "Processing {} -> {} (limit: {})",
-                    channel_config.source,
-                    channel_config.target,
+                    source_display,
+                    target_display,
                     if channel_config.limit == 0 {
                         "all".to_string()
                     } else {
@@ -280,7 +298,7 @@ async fn main() -> anyhow::Result<()> {
                 let mut total_forwarded = 0i64;
                 let mut total_skipped = 0i64;
 
-                match harvest::harvest_channel(&client, &db_conn, channel_config, &global_config).await {
+                match harvest::harvest_channel(&client, &db_conn, channel_config, &global_config, &peer_cache, &peer_names).await {
                     Ok(stats) => {
                         total_scanned += stats.total_scanned;
                         total_forwarded += stats.total_forwarded;
@@ -346,7 +364,7 @@ async fn main() -> anyhow::Result<()> {
             2 => {
                 // 删除任务
                 let confirm = dialoguer::Confirm::new()
-                    .with_prompt(format!("确认删除任务 {} -> {}?", channel_config.source, channel_config.target))
+                    .with_prompt(format!("确认删除任务 {} -> {}?", source_display, target_display))
                     .interact()?;
 
                 if confirm {

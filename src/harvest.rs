@@ -8,6 +8,7 @@ use chrono::Utc;
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 
 pub struct HarvestStats {
@@ -98,6 +99,7 @@ pub async fn harvest_channel(
             break;
         }
 
+        let batch_start = Instant::now();
         tracing::debug!("Fetching batch with offset_id={}", offset);
 
         let source_ref = source_peer.to_ref().await.context("Failed to get peer ref")?;
@@ -106,6 +108,7 @@ pub async fn harvest_channel(
 
         let mut batch: Vec<Message> = Vec::new();
         let mut raw_count = 0usize;
+        let mut deleted_count = 0usize;
         loop {
             match iter.next().await {
                 Ok(Some(msg)) => {
@@ -113,6 +116,7 @@ pub async fn harvest_channel(
                     let text = msg.text();
                     let media = msg.media();
                     if text.is_empty() && media.is_none() {
+                        deleted_count += 1;
                         continue;
                     }
                     batch.push(msg);
@@ -130,6 +134,17 @@ pub async fn harvest_channel(
             }
         }
 
+        let fetch_elapsed = batch_start.elapsed();
+        tracing::info!(
+            "Batch [{}, {}) fetched: raw={}, deleted={}, kept={}, fetch={}ms",
+            offset - batch_size as i32,
+            offset,
+            raw_count,
+            deleted_count,
+            batch.len(),
+            fetch_elapsed.as_millis(),
+        );
+
         if batch.is_empty() {
             if cursor.last_msg_id > 0 {
                 empty_count += 1;
@@ -139,6 +154,7 @@ pub async fn harvest_channel(
                     break;
                 }
             }
+            offset += batch_size as i32;
             continue;
         }
 
@@ -288,14 +304,16 @@ pub async fn harvest_channel(
             let db = db_conn.lock().await;
             db::save_cursor(&db, &source, &target, &cursor).context("Failed to save cursor")?;
         }
+        let total_elapsed = batch_start.elapsed();
+        let process_elapsed = total_elapsed.saturating_sub(fetch_elapsed);
         tracing::info!(
-            "Batch [{}, {}): raw={}, filtered={}, scanned={}, forwarded={}",
+            "Batch [{}, {}) processed: scanned={}, forwarded={}, process={}ms, total={}ms",
             offset - batch_size as i32,
             offset,
-            raw_count,
-            batch.len(),
             total_scanned,
-            total_forwarded
+            total_forwarded,
+            process_elapsed.as_millis(),
+            total_elapsed.as_millis(),
         );
 
         offset += batch_size as i32;
